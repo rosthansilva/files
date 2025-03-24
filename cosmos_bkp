@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# Variáveis
+RESOURCE_GROUP="meuResourceGroup"
+LOCATION="eastus"
+DATAFACTORY_NAME="meuDataFactory"
+STORAGE_ACCOUNT_NAME="meustorage$(date +%s)"
+CONTAINER_NAME="cosmosdump"
+COSMOSDB_ACCOUNT_NAME="meuCosmosDB"
+COSMOSDB_DATABASE_NAME="meuDatabase"
+COSMOSDB_CONTAINER_NAME="meuContainer"
+SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+
+# Criar Storage Account
+echo "Criando Storage Account..."
+az storage account create --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --location $LOCATION --sku Standard_LRS
+
+# Criar Container no Storage Account
+echo "Criando container no Storage Account..."
+STORAGE_KEY=$(az storage account keys list --resource-group $RESOURCE_GROUP --account-name $STORAGE_ACCOUNT_NAME --query '[0].value' -o tsv)
+az storage container create --name $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY
+
+# Criar Data Factory
+echo "Criando Azure Data Factory..."
+az datafactory create --resource-group $RESOURCE_GROUP --name $DATAFACTORY_NAME --location $LOCATION
+
+# Criar Linked Service para CosmosDB
+echo "Criando Linked Service para o CosmosDB..."
+az datafactory linked-service create --resource-group $RESOURCE_GROUP --factory-name $DATAFACTORY_NAME --name "CosmosDBLinkedService" \
+  --properties '{
+    "type": "AzureCosmosDb",
+    "typeProperties": {
+      "accountEndpoint": "https://'"$COSMOSDB_ACCOUNT_NAME"'.documents.azure.com:443/",
+      "database": "'"$COSMOSDB_DATABASE_NAME"'",
+      "authenticationType": "AccountKey",
+      "accountKey": "'"$COSMOSDB_ACCOUNT_KEY"'"
+    }
+  }'
+
+# Criar Linked Service para o Storage Account
+echo "Criando Linked Service para o Storage Account..."
+az datafactory linked-service create --resource-group $RESOURCE_GROUP --factory-name $DATAFACTORY_NAME --name "StorageLinkedService" \
+  --properties '{
+    "type": "AzureBlobStorage",
+    "typeProperties": {
+      "connectionString": "DefaultEndpointsProtocol=https;AccountName='"$STORAGE_ACCOUNT_NAME"';AccountKey='"$STORAGE_KEY"';EndpointSuffix=core.windows.net"
+    }
+  }'
+
+# Criar Pipeline para exportação do CosmosDB
+echo "Criando Pipeline para exportação..."
+az datafactory pipeline create --resource-group $RESOURCE_GROUP --factory-name $DATAFACTORY_NAME --name "CosmosDumpPipeline" \
+  --properties '{
+    "activities": [
+      {
+        "name": "CopyFromCosmosToBlob",
+        "type": "Copy",
+        "inputs": [
+          {
+            "referenceName": "CosmosDBDataset",
+            "type": "DatasetReference"
+          }
+        ],
+        "outputs": [
+          {
+            "referenceName": "BlobDataset",
+            "type": "DatasetReference"
+          }
+        ],
+        "typeProperties": {
+          "source": {
+            "type": "CosmosDbSqlApiSource"
+          },
+          "sink": {
+            "type": "BlobSink"
+          }
+        }
+      }
+    ]
+  }'
+
+echo "Script concluído! Verifique seu Azure Data Factory."
